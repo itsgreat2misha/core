@@ -1,6 +1,8 @@
 """The Bravia TV integration."""
 
+import socket
 from typing import Final
+from urllib.parse import urlparse
 
 from aiohttp import CookieJar
 from pybravia import BraviaClient
@@ -11,6 +13,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.service_info.ssdp import SsdpServiceInfo
+from homeassistant.util.network import is_ip_address
 
 from .const import CONF_USE_SSL, DOMAIN
 from .coordinator import BraviaTVConfigEntry, BraviaTVCoordinator
@@ -49,13 +52,35 @@ async def async_setup_entry(
     async def async_ssdp_callback(
         discovery_info: SsdpServiceInfo, change: ssdp.SsdpChange
     ) -> None:
+        # The SSDP _host header is always an IP address, so it cannot be
+        # used to filter in async_register_callback when the configured
+        # host is a hostname. Filter here instead, using the host from
+        # the announcement location, which a relay forwards unchanged.
+        announced_host = None
+        if discovery_info.ssdp_location:
+            announced_host = urlparse(discovery_info.ssdp_location).hostname
+        if not announced_host:
+            announced_host = discovery_info.ssdp_headers.get("_host")
+        if not announced_host:
+            return
+        if announced_host.lower() != host.lower():
+            if is_ip_address(host):
+                return
+            try:
+                resolved_host = await hass.async_add_executor_job(
+                    socket.gethostbyname, host
+                )
+            except OSError:
+                return
+            if announced_host != resolved_host:
+                return
         await coordinator.async_request_refresh()
 
     config_entry.async_on_unload(
         await ssdp.async_register_callback(
             hass,
             async_ssdp_callback,
-            {"nt": "urn:schemas-upnp-org:device:MediaRenderer:1", "_host": host},
+            {"nt": "urn:schemas-upnp-org:device:MediaRenderer:1"},
         )
     )
 
