@@ -58,7 +58,10 @@ async def async_setup_entry(
         # the announcement location, which a relay forwards unchanged.
         announced_host = None
         if discovery_info.ssdp_location:
-            announced_host = urlparse(discovery_info.ssdp_location).hostname
+            try:
+                announced_host = urlparse(discovery_info.ssdp_location).hostname
+            except ValueError:
+                return
         if not announced_host:
             announced_host = discovery_info.ssdp_headers.get("_host")
         if not announced_host:
