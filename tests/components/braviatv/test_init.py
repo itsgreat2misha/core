@@ -157,7 +157,6 @@ async def test_ssdp_callback_triggers_refresh(
     callback, match_dict = mock_register.call_args.args[1:]
     assert match_dict == {
         "nt": "urn:schemas-upnp-org:device:MediaRenderer:1",
-        "_host": "bravia-host",
     }
     assert mock_braviatv_client.get_power_status.call_count == 1
 
@@ -180,6 +179,93 @@ async def test_ssdp_callback_triggers_refresh(
     await hass.async_block_till_done()
 
     unsubscribe.assert_called_once()
+
+
+async def _ssdp_callback_for_entry(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+) -> object:
+    """Set up an entry with a mocked SSDP registration and return its callback."""
+    with patch(
+        "homeassistant.components.braviatv.ssdp.async_register_callback",
+        return_value=MagicMock(),
+    ) as mock_register:
+        await init_integration(hass, config_entry)
+    return mock_register.call_args.args[1]
+
+
+async def _fire_ssdp_callback(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    callback: object,
+    location: str,
+) -> None:
+    """Fire an SSDP callback for a location and flush the refresh debouncer."""
+    await callback(
+        SsdpServiceInfo(
+            ssdp_usn="mock_usn",
+            ssdp_st="mock_st",
+            ssdp_location=location,
+            upnp={},
+        ),
+        ssdp.SsdpChange.ALIVE,
+    )
+    freezer.tick(timedelta(seconds=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+async def test_ssdp_callback_hostname_resolved_ip(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_config_entry: MockConfigEntry,
+    mock_braviatv_client: AsyncMock,
+) -> None:
+    """Test a hostname entry refreshes only for its resolved IP."""
+    callback = await _ssdp_callback_for_entry(hass, mock_config_entry)
+    assert mock_braviatv_client.get_power_status.call_count == 1
+
+    with patch("socket.gethostbyname", return_value="192.0.2.10"):
+        # An announcement from a different TV does not refresh
+        await _fire_ssdp_callback(
+            hass, freezer, callback, "http://192.0.2.11:52323/dmr.xml"
+        )
+        assert mock_braviatv_client.get_power_status.call_count == 1
+
+        # An announcement from the resolved IP refreshes
+        await _fire_ssdp_callback(
+            hass, freezer, callback, "http://192.0.2.10:52323/dmr.xml"
+        )
+        assert mock_braviatv_client.get_power_status.call_count == 2
+
+
+async def test_ssdp_callback_ip_host(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_braviatv_client: AsyncMock,
+) -> None:
+    """Test an IP entry refreshes only for that IP, without resolving."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="BRAVIA TV-Model",
+        unique_id="very_unique_string",
+        minor_version=2,
+        data={**ENTRY_DATA, CONF_HOST: "192.0.2.10"},
+    )
+    callback = await _ssdp_callback_for_entry(hass, config_entry)
+    assert mock_braviatv_client.get_power_status.call_count == 1
+
+    with patch("socket.gethostbyname") as mock_resolve:
+        await _fire_ssdp_callback(
+            hass, freezer, callback, "http://192.0.2.11:52323/dmr.xml"
+        )
+        assert mock_braviatv_client.get_power_status.call_count == 1
+
+        await _fire_ssdp_callback(
+            hass, freezer, callback, "http://192.0.2.10:52323/dmr.xml"
+        )
+        assert mock_braviatv_client.get_power_status.call_count == 2
+        mock_resolve.assert_not_called()
 
 
 async def test_setup_auth_error_starts_reauth(
