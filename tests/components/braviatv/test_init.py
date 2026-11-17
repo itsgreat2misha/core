@@ -268,6 +268,43 @@ async def test_ssdp_callback_ip_host(
         mock_resolve.assert_not_called()
 
 
+async def test_ssdp_callback_header_fallback_and_malformed_location(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_braviatv_client: AsyncMock,
+) -> None:
+    """Test the _host header fallback and that a malformed location is ignored."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="BRAVIA TV-Model",
+        unique_id="very_unique_string",
+        minor_version=2,
+        data={**ENTRY_DATA, CONF_HOST: "192.0.2.10"},
+    )
+    callback = await _ssdp_callback_for_entry(hass, config_entry)
+    assert mock_braviatv_client.get_power_status.call_count == 1
+
+    # No location: the _host header identifies the TV
+    await callback(
+        SsdpServiceInfo(
+            ssdp_usn="mock_usn",
+            ssdp_st="mock_st",
+            ssdp_location=None,
+            ssdp_headers={"_host": "192.0.2.10"},
+            upnp={},
+        ),
+        ssdp.SsdpChange.ALIVE,
+    )
+    freezer.tick(timedelta(seconds=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert mock_braviatv_client.get_power_status.call_count == 2
+
+    # A malformed location is ignored, without raising
+    await _fire_ssdp_callback(hass, freezer, callback, "http://[::1")
+    assert mock_braviatv_client.get_power_status.call_count == 2
+
+
 async def test_setup_auth_error_starts_reauth(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
