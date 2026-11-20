@@ -305,6 +305,49 @@ async def test_ssdp_callback_header_fallback_and_malformed_location(
     assert mock_braviatv_client.get_power_status.call_count == 2
 
 
+async def test_ssdp_callback_hostname_resolution_failure(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_config_entry: MockConfigEntry,
+    mock_braviatv_client: AsyncMock,
+) -> None:
+    """Test a failed hostname resolution does not refresh or raise."""
+    callback = await _ssdp_callback_for_entry(hass, mock_config_entry)
+    assert mock_braviatv_client.get_power_status.call_count == 1
+
+    with patch("socket.gethostbyname", side_effect=OSError):
+        await _fire_ssdp_callback(
+            hass, freezer, callback, "http://192.0.2.10:52323/dmr.xml"
+        )
+    assert mock_braviatv_client.get_power_status.call_count == 1
+
+
+async def test_ssdp_callback_no_host_info(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_config_entry: MockConfigEntry,
+    mock_braviatv_client: AsyncMock,
+) -> None:
+    """Test an announcement without any host info does not refresh or raise."""
+    callback = await _ssdp_callback_for_entry(hass, mock_config_entry)
+    assert mock_braviatv_client.get_power_status.call_count == 1
+
+    await callback(
+        SsdpServiceInfo(
+            ssdp_usn="mock_usn",
+            ssdp_st="mock_st",
+            ssdp_location=None,
+            ssdp_headers={},
+            upnp={},
+        ),
+        ssdp.SsdpChange.ALIVE,
+    )
+    freezer.tick(timedelta(seconds=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert mock_braviatv_client.get_power_status.call_count == 1
+
+
 async def test_setup_auth_error_starts_reauth(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
